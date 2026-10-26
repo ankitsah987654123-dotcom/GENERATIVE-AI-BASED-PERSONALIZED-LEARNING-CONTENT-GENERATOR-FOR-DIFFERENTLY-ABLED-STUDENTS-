@@ -49,25 +49,22 @@ def load_model():
 
 def model_generate(text, output_type, length):
     tok, model = load_model()
-    max_new = {"Short": 48, "Medium": 80, "Long": 128}[length]
-    sents = re.split(r"(?<=[.!?])\s+", text.strip())
-    chunks = [" ".join(sents[i:i + 2]) for i in range(0, len(sents), 2)]
+    max_sents = {"Short": 2, "Medium": 5, "Long": 10}[length]
+    sents = [x for x in re.split(r"(?<=[.!?])\s+", text.strip()) if x][:max_sents]
     outputs = []
-    for chunk in chunks:
-        enc = tok(PREFIX + chunk, return_tensors="pt", truncation=True, max_length=256)
-        ids = model.generate(**enc, max_new_tokens=max_new, num_beams=4,
+    for sent in sents:
+        enc = tok(PREFIX + sent, return_tensors="pt", truncation=True, max_length=256)
+        ids = model.generate(**enc, max_new_tokens=100, num_beams=4,
                              no_repeat_ngram_size=3, early_stopping=True)
         outputs.append(tok.decode(ids[0], skip_special_tokens=True))
-    result = " ".join(outputs)
     if output_type == "Short notes":
-        return "### Key Notes\n" + "\n".join(
-            f"- {s}" for s in re.split(r"(?<=[.!?])\s+", result) if s)
-    return result
+        return "### Key Notes\n" + "\n".join(f"- {o}" for o in outputs)
+    return " ".join(outputs)
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_wikipedia_text(topic_text):
-    """Fetch a short plain-text summary of the topic from Wikipedia."""
+    """Fetch longer plain-text content of the topic from Wikipedia."""
     headers = {"User-Agent": "AccessibleLearningApp/1.0"}
     def fetch(url):
         req = urllib.request.Request(url, headers=headers)
@@ -77,9 +74,13 @@ def get_wikipedia_text(topic_text):
         q = urllib.parse.quote(topic_text.strip())
         found = fetch(f"https://en.wikipedia.org/w/api.php?action=opensearch&search={q}&limit=1&format=json")
         title = found[1][0] if found[1] else topic_text.strip()
-        data = fetch("https://en.wikipedia.org/api/rest_v1/page/summary/" +
-                     urllib.parse.quote(title.replace(" ", "_")))
-        return data.get("extract", "")
+        t = urllib.parse.quote(title)
+        data = fetch("https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1"
+                     f"&exchars=3000&redirects=1&format=json&titles={t}")
+        page = next(iter(data["query"]["pages"].values()))
+        text = page.get("extract", "")
+        text = re.sub(r"==.*?==", " ", text)       # drop section headings
+        return re.sub(r"\s+", " ", text).strip()
     except Exception:
         return ""
 
