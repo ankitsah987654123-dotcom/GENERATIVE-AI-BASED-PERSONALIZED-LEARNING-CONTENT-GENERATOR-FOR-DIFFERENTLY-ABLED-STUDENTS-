@@ -1,4 +1,7 @@
 import re
+import json
+import urllib.parse
+import urllib.request
 import streamlit as st
 from pathlib import Path
 
@@ -62,6 +65,25 @@ def model_generate(text, output_type, length):
     return result
 
 
+@st.cache_data(show_spinner=False, ttl=3600)
+def get_wikipedia_text(topic_text):
+    """Fetch a short plain-text summary of the topic from Wikipedia."""
+    headers = {"User-Agent": "AccessibleLearningApp/1.0"}
+    def fetch(url):
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read().decode("utf-8"))
+    try:
+        q = urllib.parse.quote(topic_text.strip())
+        found = fetch(f"https://en.wikipedia.org/w/api.php?action=opensearch&search={q}&limit=1&format=json")
+        title = found[1][0] if found[1] else topic_text.strip()
+        data = fetch("https://en.wikipedia.org/api/rest_v1/page/summary/" +
+                     urllib.parse.quote(title.replace(" ", "_")))
+        return data.get("extract", "")
+    except Exception:
+        return ""
+
+
 def fallback_generate(topic_text, source, level, output_type, length):
     basis = source.strip() or f"Topic: {topic_text.strip()}"
     words = basis.replace("\n", " ").split()
@@ -81,6 +103,13 @@ if st.button("Generate learning content", type="primary", use_container_width=Tr
         st.warning("Please enter a topic or paste learning material first.")
     else:
         input_text = source_text.strip()
+        if not input_text and topic.strip():
+            with st.spinner('Fetching topic information...'):
+                input_text = get_wikipedia_text(topic)
+            if input_text:
+                st.caption('Source text fetched from Wikipedia and simplified by the model.')
+            else:
+                st.warning('Could not find information on this topic. Please paste some text.')
         with st.spinner("Preparing learning content..."):
             if use_model and input_text:
                 try:
@@ -93,7 +122,7 @@ if st.button("Generate learning content", type="primary", use_container_width=Tr
             else:
                 if use_model and not input_text:
                     st.warning("The trained model simplifies pasted text. Paste material for best results.")
-                generated = fallback_generate(topic, source_text, level, output_type, length)
+                generated = fallback_generate(topic, input_text or source_text, level, output_type, length)
                 st.caption("Preview mode: rule-based output.")
         st.markdown(generated)
         st.download_button("Download content as TXT", data=generated,
